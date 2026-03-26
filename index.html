@@ -318,6 +318,7 @@ const KB_NAMES  = ['Keyboard 1','Keyboard 2','Keyboard 3'];
 let audioCtx = null;
 let synced = true;
 const keyboards = [];
+let masterStartTime = null;
 
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -530,9 +531,27 @@ async function handleGo(idx) {
   const s = keyboards[idx];
   if (s.isPlaying) return;
   s.isPlaying = true;
-  s.beatCount = 0;
   s.playing = Array.from(s.sel);
-  s.nextTime = c.currentTime + 0.05;
+
+  if (synced) {
+    if (masterStartTime === null) {
+      masterStartTime = c.currentTime + 0.05;
+    }
+    const eighth = 60 / s.bpm / 2;
+    const elapsed = c.currentTime + 0.05 - masterStartTime;
+    const beatsSinceStart = Math.floor(elapsed / eighth);
+    s.beatCount = beatsSinceStart;
+    s.nextTime = masterStartTime + beatsSinceStart * eighth;
+    while (s.nextTime <= c.currentTime) {
+      s.nextTime += eighth;
+      s.beatCount++;
+    }
+  } else {
+    masterStartTime = null;
+    s.beatCount = 0;
+    s.nextTime = c.currentTime + 0.05;
+  }
+
   document.getElementById(s.id+'-go').disabled = true;
   document.getElementById(s.id+'-stop').disabled = false;
   document.getElementById(s.id+'-playing').textContent = label(s.playing);
@@ -553,6 +572,7 @@ function stopKb(idx) {
   document.getElementById(s.id+'-go').disabled = false;
   document.getElementById(s.id+'-stop').disabled = true;
   document.getElementById(s.id+'-playing').textContent = '—';
+  if (keyboards.every(k => !k.isPlaying)) masterStartTime = null;
 }
 
 function scheduleKb(s) {
