@@ -340,11 +340,15 @@ function makeKeyboard(idx) {
     isPlaying: false,
     bpm: 120,
     vol: 0.8,
+    reverb: 0,
     waveType: 'sine',
     beatCount: 0,
     nextTime: 0,
     timerId: null,
     currentBeat: -1,
+    convolver: null,
+    reverbGain: null,
+    dryGain: null,
   };
   keyboards.push(state);
 
@@ -372,6 +376,12 @@ function makeKeyboard(idx) {
           id="${id}-tempo" oninput="onTempo(${idx},this.value)"
           ${idx > 0 ? 'disabled' : ''}>
         <span id="${id}-tempoval" ${idx > 0 ? 'class="dim"' : ''}>120 bpm</span>
+      </div>
+      <div class="slider-group">
+        <label>Reverb</label>
+        <input type="range" min="0" max="100" value="0" step="1"
+          id="${id}-reverb" oninput="onReverb(${idx},this.value)">
+        <span id="${id}-reverbval">0%</span>
       </div>
       <div class="slider-group">
         <label>Vol</label>
@@ -497,6 +507,24 @@ function onVol(idx, v) {
   document.getElementById('kb'+idx+'-volval').textContent = v + '%';
 }
 
+function onReverb(idx, v) {
+  keyboards[idx].reverb = parseInt(v) / 100;
+  document.getElementById('kb'+idx+'-reverbval').textContent = v + '%';
+}
+
+function buildImpulse(c, duration, decay) {
+  const sr = c.sampleRate;
+  const len = sr * duration;
+  const buf = c.createBuffer(2, len, sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+  }
+  return buf;
+}
+
 function toggleSync() {
   synced = !synced;
   const btn = document.getElementById('syncBtn');
@@ -619,6 +647,13 @@ function fireStep(s, t, b) {
   const eighth = 60 / s.bpm / 2;
   const wave = s.waveType;
   const vol = (WAVE_VOL[wave] || 0.15) * s.vol;
+  const reverbAmt = s.reverb;
+
+  let convolver = null;
+  if (reverbAmt > 0) {
+    convolver = c.createConvolver();
+    convolver.buffer = buildImpulse(c, 2.5, 3);
+  }
 
   notes.forEach(i => {
     const osc = c.createOscillator();
@@ -629,9 +664,23 @@ function fireStep(s, t, b) {
     gain.gain.linearRampToValueAtTime(vol, t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.001, t + eighth * 0.9);
     osc.connect(gain);
-    gain.connect(c.destination);
+
+    if (reverbAmt > 0 && convolver) {
+      const dryGain = c.createGain();
+      const wetGain = c.createGain();
+      dryGain.gain.setValueAtTime(1 - reverbAmt * 0.8, t);
+      wetGain.gain.setValueAtTime(reverbAmt, t);
+      gain.connect(dryGain);
+      gain.connect(convolver);
+      convolver.connect(wetGain);
+      dryGain.connect(c.destination);
+      wetGain.connect(c.destination);
+    } else {
+      gain.connect(c.destination);
+    }
+
     osc.start(t);
-    osc.stop(t + eighth);
+    osc.stop(t + eighth + (reverbAmt > 0 ? 2.5 : 0));
   });
 
   setTimeout(() => {
