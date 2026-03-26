@@ -510,6 +510,11 @@ function onVol(idx, v) {
 function onReverb(idx, v) {
   keyboards[idx].reverb = parseInt(v) / 100;
   document.getElementById('kb'+idx+'-reverbval').textContent = v + '%';
+  const s = keyboards[idx];
+  if (s.reverbGain && s.dryGain && audioCtx) {
+    s.reverbGain.gain.setTargetAtTime(s.reverb, audioCtx.currentTime, 0.02);
+    s.dryGain.gain.setTargetAtTime(1 - s.reverb * 0.8, audioCtx.currentTime, 0.02);
+  }
 }
 
 function buildImpulse(c, duration, decay) {
@@ -523,6 +528,19 @@ function buildImpulse(c, duration, decay) {
     }
   }
   return buf;
+}
+
+function ensureReverbNodes(s, c) {
+  if (s.convolver) return;
+  s.convolver = c.createConvolver();
+  s.convolver.buffer = buildImpulse(c, 2.5, 3);
+  s.dryGain = c.createGain();
+  s.reverbGain = c.createGain();
+  s.dryGain.gain.value = 1;
+  s.reverbGain.gain.value = 0;
+  s.dryGain.connect(c.destination);
+  s.convolver.connect(s.reverbGain);
+  s.reverbGain.connect(c.destination);
 }
 
 function toggleSync() {
@@ -601,6 +619,9 @@ function stopKb(idx) {
   document.getElementById(s.id+'-stop').disabled = true;
   document.getElementById(s.id+'-playing').textContent = '—';
   if (keyboards.every(k => !k.isPlaying)) masterStartTime = null;
+  s.convolver = null;
+  s.dryGain = null;
+  s.reverbGain = null;
 }
 
 function scheduleKb(s) {
@@ -647,13 +668,10 @@ function fireStep(s, t, b) {
   const eighth = 60 / s.bpm / 2;
   const wave = s.waveType;
   const vol = (WAVE_VOL[wave] || 0.15) * s.vol;
-  const reverbAmt = s.reverb;
 
-  let convolver = null;
-  if (reverbAmt > 0) {
-    convolver = c.createConvolver();
-    convolver.buffer = buildImpulse(c, 2.5, 3);
-  }
+  ensureReverbNodes(s, c);
+  s.dryGain.gain.setTargetAtTime(1 - s.reverb * 0.8, c.currentTime, 0.02);
+  s.reverbGain.gain.setTargetAtTime(s.reverb, c.currentTime, 0.02);
 
   notes.forEach(i => {
     const osc = c.createOscillator();
@@ -664,23 +682,10 @@ function fireStep(s, t, b) {
     gain.gain.linearRampToValueAtTime(vol, t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.001, t + eighth * 0.9);
     osc.connect(gain);
-
-    if (reverbAmt > 0 && convolver) {
-      const dryGain = c.createGain();
-      const wetGain = c.createGain();
-      dryGain.gain.setValueAtTime(1 - reverbAmt * 0.8, t);
-      wetGain.gain.setValueAtTime(reverbAmt, t);
-      gain.connect(dryGain);
-      gain.connect(convolver);
-      convolver.connect(wetGain);
-      dryGain.connect(c.destination);
-      wetGain.connect(c.destination);
-    } else {
-      gain.connect(c.destination);
-    }
-
+    gain.connect(s.dryGain);
+    gain.connect(s.convolver);
     osc.start(t);
-    osc.stop(t + eighth + (reverbAmt > 0 ? 2.5 : 0));
+    osc.stop(t + eighth);
   });
 
   setTimeout(() => {
